@@ -1,0 +1,702 @@
+#!/bin/bash
+
+# ------------------------------------------------------------------------------
+# settings                                                              settings
+# ------------------------------------------------------------------------------
+set -o errtrace  # any trap on ERR is inherited by shell functions,
+                 #   command substitutions, and commands executed in a subshell
+                 #   environment
+set -o nounset   # treat unset variables and parameters other than the special
+                 #   parameters "@" and "*" as an error when performing
+                 #   parameter expansion
+set -o pipefail  # the return value of a pipeline is the value of the last
+                 #   (rightmost) command to exit with a non-zero status, or
+                 #   zero if all commands in the pipeline exit successfully
+
+# set language
+export LANG="en_US.UTF-8"
+
+# use dot as decimal separator
+export LC_NUMERIC="en_US.UTF-8"
+
+# terminal colors
+readonly    NONE=$(tput sgr0)
+readonly     RED=$(tput setaf 1)
+readonly   GREEN=$(tput setaf 2)
+readonly  YELLOW=$(tput setaf 3)
+readonly    BLUE=$(tput setaf 4)
+readonly MAGENTA=$(tput setaf 5)
+readonly    CYAN=$(tput setaf 6)
+readonly   WHITE=$(tput setaf 7)
+
+# ------------------------------------------------------------------------------
+# functions                                                            functions
+# ------------------------------------------------------------------------------
+
+# -------
+# failmsg
+# -------
+#
+# This function prints a red colored message via stderr.
+#
+function failmsg()
+{
+  # push to stderr
+  echo -e "${RED}[FAIL]${NONE} $1" 1>&2
+}
+
+# -------
+# warnmsg
+# -------
+#
+# This function prints a yellow colored message via stderr.
+#
+function warnmsg()
+{
+  # push to stderr
+  echo -e "${YELLOW}[WARN]${NONE} $1" 1>&2
+}
+
+# -------
+# infomsg
+# -------
+#
+# This function prints a blue colored message via stderr.
+#
+function infomsg()
+{
+  # push to stderr
+  echo -e "${BLUE}[INFO]${NONE} $1" 1>&2
+}
+
+# -------
+# donemsg
+# -------
+#
+# This function prints a green colored message via stderr.
+#
+function donemsg()
+{
+  # push to stderr
+  echo -e "${GREEN}[DONE]${NONE} $1" 1>&2
+}
+
+# ----------
+# utf82ascii
+# ----------
+#
+# ... | utf82ascii | ...
+#
+function utf82ascii()
+{
+  sed --regexp-extended \
+      --expression="
+
+        # escape all colons
+        s/:/:c/g
+
+        # escape all native question marks (iconv may introduce much more)
+        s/\\?/:q/g
+
+        # collection of characters that aren't translated (suitable) by iconv
+        s/¦/|/g
+        s/¡/!/g
+        s/¿/:q/g
+        s/„/\"/g
+        s/«/\"/g
+        s/»/\"/g
+        s/÷/\//g
+        s/±/+-/g
+        s/¹/^1/g
+        s/²/^2/g
+        s/³/^3/g
+        s/Ä/Ae/g
+        s/ä/ae/g
+        s/Ö/Oe/g
+        s/ö/oe/g
+        s/Ü/Ue/g
+        s/ü/ue/g
+        s/Ø/Oe/g
+        s/ø/oe/g
+        s/Ð/Dh/g
+        s/ð/dh/g
+        s/Þ/Th/g
+        s/þ/th/g
+
+      "                                       \
+  | iconv --from-code "UTF-8"                 \
+          --to-code "ASCII//TRANSLIT//IGNORE" \
+  | sed --regexp-extended                     \
+        --expression="
+
+          # remove all question marks introduced by iconv
+          s/\\?//g
+
+          # restore all escaped question marks
+          s/:q/?/g
+
+          # restore all escaped colons
+          s/:c/:/g
+
+        "
+}
+
+# --------
+# simplify
+# --------
+#
+# ... | simplify | ...
+#
+function simplify()
+{
+  sed --regexp-extended \
+      --expression="
+
+        # replace everything but letters and numbers
+        s/[^[:alnum:]]+/_/g
+
+        # lower case
+        s/.+/\L&/
+
+        # trim both ends
+        s/^_//
+        s/_$//
+
+      "
+}
+
+# ----
+# edit
+# ----
+#
+# This function shows the given file in a graphic editor.
+#
+# $1  filename
+#
+function edit()
+{
+  # set default values
+  local readonly POSX="780"
+  local readonly POSY="0"
+  local readonly WINW="800"
+  local readonly WINH="200"
+
+  # launch leafpad in background
+  leafpad "$1" &
+
+  # get process ID
+  PID="$!"
+
+  # reset window ID
+  WID=""
+
+  # wait for window to be shown
+  while [ -z "$WID" ]
+  do
+
+    # get window ID
+    WID=$(wmctrl -lp | sed -nre "s/^(0x[[:xdigit:]]+) +[^[:space:]]+ +$PID .+/\1/p")
+
+  done &>"/dev/null" 
+
+  # move and resize window
+  #   A move and resize argument has the format 'g,x,y,w,h'. All five components
+  #   are integers. The first value, g, is the gravity of the window, with 0
+  #   being the most common value (the default value for the window).
+  #   The four remaining values are a standard geometry specification: x,y is the
+  #   position of the top left corner of the window, and w,h is the width and height
+  #   of the window, with the exception that the value of -1 in any position is
+  #   interpreted to mean that the current geometry value should not be modified.
+  wmctrl -ir "$WID" -e "0,$POSX,$POSY,$WINW,$WINH"
+
+  # set 'always on top'
+  wmctrl -ir "$WID" -b "add,above"
+
+  # wait for leafpad to close
+  wait "$PID"
+}
+
+# ---------
+# get_title
+# ---------
+#
+# This function returns the TITLE tag from the given file.
+#
+# $1  filename
+#
+function get_title()
+{
+  sed --quiet           \
+      --regexp-extended \
+      --expression="
+
+        # get title (branch to end if no TITLE is found)
+        s/^TITLE=(.+)/\1/ ; T
+
+        # trim line
+        s/[[:space:]]+/ /
+        s/^ //
+        s/ $//
+
+        # print non-empty line
+        /.+/p
+
+        # print only first TITLE
+        q
+
+      " "$1"
+}
+
+# --------
+# get_year
+# --------
+#
+# This function returns the YEAR tag from the given file.
+#
+# $1  filename
+#
+function get_year()
+{
+  sed --quiet           \
+      --regexp-extended \
+      --expression="
+
+        # get year (branch to end if no YEAR is found)
+        s/^YEAR=(.+)/\1/ ; T
+
+        # trim line
+        s/[[:space:]]+/ /
+        s/^ //
+        s/ $//
+
+        # print non-empty line
+        /.+/p
+
+        # print only first YEAR
+        q
+
+      " "$1"
+}
+
+# -----------
+# get_authors
+# -----------
+#
+# This function concatenates all AUTHOR tags from the given file.
+#
+# $1  filename
+#
+function get_authors()
+{
+  cat "$1"                \
+  | sed --quiet           \
+        --regexp-extended \
+        --expression="
+
+          # skip comments
+          /^#/ { d }
+
+          # get author (branch to end if no AUTHOR is found)
+          s/^AUTHOR=(.+)/\1/ ; T
+
+          # trim line
+          s/[[:space:]]+/ /
+          s/^ //
+          s/ $//
+
+          # print non-empty line
+          /.+/ { p }
+
+          # stop after first et alii
+          /^et al\.$/ { q }
+
+        "                 \
+  | sed -re "$ a DUMMY"   \
+  | sed --quiet           \
+        --regexp-extended \
+        --expression="
+
+          # last line found (DUMMY)
+          $ {
+
+            # copy hold space to pattern space
+            g
+
+            # concatenate lines (separate with semicolon)
+            s/\x0A/; /g
+
+            # trim both ends
+            s/^[; ]*//
+            s/[; ]*$//
+
+            # don't separate et alii
+            s/;( et al\.)$/\1/
+
+            # print non-empty line
+            /.+/ { p }
+
+            # branch to end of script
+            b
+          }
+
+          # name is already comma-separated:
+          #   append line to hold space without modification
+          #   and branch to end of script
+          /,/ { H ; b }
+
+          # et alii found
+          /^et al\.$/ { H ; b }
+
+          # copy last name to the front
+          s/(.+) ([^ ]+)$/\2, \1/
+
+          # append line to hold space
+          H
+
+        "
+}
+
+# -----------
+# get_editors
+# -----------
+#
+# This function concatenates all EDITOR tags from the given file.
+#
+# $1  filename
+#
+function get_editors()
+{
+  cat "$1"                \
+  | sed --quiet           \
+        --regexp-extended \
+        --expression="
+
+          # skip comments
+          /^#/ { d }
+
+          # get author (branch to end if no AUTHOR is found)
+          s/^EDITOR=(.+)/\1/ ; T
+
+          # trim line
+          s/[[:space:]]+/ /
+          s/^ //
+          s/ $//
+
+          # print non-empty line
+          /.+/ { p }
+
+          # stop after first et alii
+          /^et al\.$/ { q }
+
+        "                 \
+  | sed -re "$ a DUMMY"   \
+  | sed --quiet           \
+        --regexp-extended \
+        --expression="
+
+          # last line found (DUMMY)
+          $ {
+
+            # copy hold space to pattern space
+            g
+
+            # concatenate lines (separate with semicolon)
+            s/\x0A/; /g
+
+            # trim both ends
+            s/^[; ]*//
+            s/[; ]*$//
+
+            # don't separate et alii
+            s/ \(Hg\.\);( et al\. \(Hg\.\))$/\1/
+
+            # print non-empty line
+            /.+/ { p }
+
+            # branch to end of script
+            b
+          }
+
+          # name is already comma-separated:
+          #   append editor id
+          #   and branch to end of script
+          /,/ { s/.+/& (Hg.)/ ; H ; b }
+
+          # et alii found
+          /^et al\.$/ { s/.+/& (Hg.)/ ; H ; b }
+
+          # copy last name to the front and append editor id
+          s/(.+) ([^ ]+)$/\2, \1 (Hg.)/
+
+          # append line to hold space
+          H
+
+        "
+}
+# ------------------------------------------------------------------------------
+# options                                                                options
+# ------------------------------------------------------------------------------
+
+# set default values
+OPMODE="DEFAULT"
+
+# set options to accept
+readonly KNOWN_OPTIONS=":hv"
+
+# check passed options
+while getopts "$KNOWN_OPTIONS" OPTION "$@"
+do
+
+  case "$OPTION" in
+
+    # show help
+    "h") OPMODE="SHOW_HELP"
+         ;;
+
+    # show version
+    "v") OPMODE="SHOW_VERSION"
+         ;;
+
+    "?") failmsg "unknown option: -$OPTARG"
+         exit 1
+         ;;
+
+    ":") failmsg "missing argument: -$OPTARG <argument>"
+         exit 1
+         ;;
+
+  esac
+
+done
+
+# get number of positional parameters
+PPNUM=$(( $# - OPTIND + 1 ))
+
+# drop all parsed options
+shift $(( OPTIND - 1 ))
+
+# ------------------------------------------------------------------------------
+# commands                                                              commands
+# ------------------------------------------------------------------------------
+
+# check number of parameters
+if (( $# != 1 )) ; then
+
+  # notify user
+  failmsg "exactly one filename must be given"
+
+  # signalize trouble
+  exit 1
+
+fi
+
+# check given file
+if [ ! -f "$1" ] ; then
+
+  # notify user
+  failmsg "unable to locate file: \"$1\""
+
+  # signalize trouble
+  exit 1
+
+fi
+
+# get MIME type
+MIMETYPE=$(file --brief --mime-type "$1")
+
+# check MIME type
+if [ "$MIMETYPE" != "application/pdf" ] ; then
+
+  # notify user
+  failmsg "no pdf file given: \"$1\""
+
+  # signalize trouble
+  exit 1
+
+fi
+
+# get directory (assert trailing slash)
+DNAME=$(dirname "$1" | sed -nre "s|.+|&/| ; s|//$|/| ; /.+/p")
+
+# check write permission
+if [ ! -w "$DNAME" ] ; then
+
+  # notify user
+  failmsg "no write permission: \"$DNAME\""
+
+  # signalize trouble
+  exit 1
+
+fi
+
+# create temporary file
+TEMPFILE=$(mktemp --suffix=".bookrename")
+
+# clean up on exit
+trap 'rm -f "$TEMPFILE"' EXIT
+
+# redirect entire group
+{
+  echo "TITLE="
+  echo "AUTHOR="
+  echo "AUTHOR="
+  echo "# AUTHOR=et al."
+  echo "EDITOR="
+  echo "EDITOR="
+  echo "# EDITOR=et al."
+  echo "YEAR="
+
+} > "$TEMPFILE"
+
+# open pdf file on page one
+xreader -i 1 "$1" &
+
+# get process id
+XREADERPID="$!"
+
+# show editor
+edit "$TEMPFILE"
+
+# check if xreader is still running
+RUNNING=$(ps -A | grep -E "^[[:space:]]*$XREADERPID[[:space:]].+xreader$")
+
+# check process
+if [ -n "$RUNNING" ] ; then
+
+  # kill xreader
+  kill "$XREADERPID"
+  wait "$XREADERPID"
+
+fi &>"/dev/null"
+
+# get data from tag file
+  TITLE=$(get_title   "$TEMPFILE")
+AUTHORS=$(get_authors "$TEMPFILE")
+EDITORS=$(get_editors "$TEMPFILE")
+   YEAR=$(get_year    "$TEMPFILE")
+
+# check title
+if [ -z "$TITLE" ] ; then
+
+  # notify user
+  failmsg "no title given"
+
+  # signalize trouble
+  exit 1
+
+fi
+
+# check year
+if [ -z "$YEAR" ] ; then
+
+  # notify user
+  failmsg "no year given"
+
+  # signalize trouble
+  exit 1
+
+fi
+
+# check authors and editors
+if [ -z "$AUTHORS$EDITORS" ] ; then
+
+  # notify user
+  failmsg "at least one author or editor must be given"
+
+  # signalize trouble
+  exit 1
+
+fi
+
+# bibliographical reference
+REFERENCE=""
+
+# check if authors are given
+if [ -n "$AUTHORS" ] ; then
+
+  # start with authors
+  REFERENCE="$AUTHORS"
+
+fi
+
+# check if editors are given
+if [ -n "$EDITORS" ] ; then
+
+  # check if reference has alredy been started
+  if [ -n "$REFERENCE" ] ; then
+
+    # append separator
+    REFERENCE="$REFERENCE; "
+
+  fi
+
+  # append editors
+  REFERENCE="$REFERENCE$EDITORS"
+
+fi
+
+# check if year is given
+if [ -n "$YEAR" ] ; then
+
+  # check if reference has alredy been started
+  if [ -n "$REFERENCE" ] ; then
+
+    # append separator
+    REFERENCE="$REFERENCE "
+
+  fi
+
+  # append year
+  REFERENCE="$REFERENCE($YEAR)"
+
+fi
+
+# check if title is given
+if [ -n "$TITLE" ] ; then
+
+  # check if reference has alredy been started
+  if [ -n "$REFERENCE" ] ; then
+
+    # append separator
+    REFERENCE="$REFERENCE: "
+
+  fi
+
+  # append title
+  REFERENCE="$REFERENCE$TITLE"
+
+fi
+
+# get random hash value
+HASH=$(date -Ins | sha1sum | sed -re "s/ +//")
+
+# create new filenames
+TEMPNAME=$(printf "%s%s.pdf" "$DNAME" "$HASH")
+FILENAME=$(printf "%s%s.pdf" "$DNAME" "$(utf82ascii <<< "$REFERENCE" | simplify)")
+
+# temporary rename given file
+mv --no-clobber "$1" "$TEMPNAME" &>"/dev/null"
+
+# check if new filename is already present
+if [ -f "$FILENAME" ] ; then
+
+  # restore initial filename
+  mv --no-clobber "$TEMPNAME" "$1" &>"/dev/null"
+
+  # notify user
+  failmsg "filename already used: $FILENAME"
+
+  # signalize trouble
+  exit 1
+
+fi
+
+# finally rename file
+mv --no-clobber "$TEMPNAME" "$FILENAME" &>"/dev/null"
+
+# show progress
+donemsg "file renamed: $FILENAME"
+
+# signalize success
+exit 0
+
