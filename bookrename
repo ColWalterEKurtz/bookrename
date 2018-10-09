@@ -540,10 +540,10 @@ trap 'rm -f "$TEMPFILE"' EXIT
   echo "TITLE="
   echo "AUTHOR="
   echo "AUTHOR="
-  echo "# AUTHOR=et al."
+  echo "###### AUTHOR=et al."
   echo "EDITOR="
   echo "EDITOR="
-  echo "# EDITOR=et al."
+  echo "###### EDITOR=et al."
   echo "YEAR="
 
 } > "$TEMPFILE"
