@@ -433,47 +433,6 @@ function get_editors()
 
         "
 }
-# ------------------------------------------------------------------------------
-# options                                                                options
-# ------------------------------------------------------------------------------
-
-# set default values
-OPMODE="DEFAULT"
-
-# set options to accept
-readonly KNOWN_OPTIONS=":hv"
-
-# check passed options
-while getopts "$KNOWN_OPTIONS" OPTION "$@"
-do
-
-  case "$OPTION" in
-
-    # show help
-    "h") OPMODE="SHOW_HELP"
-         ;;
-
-    # show version
-    "v") OPMODE="SHOW_VERSION"
-         ;;
-
-    "?") failmsg "unknown option: -$OPTARG"
-         exit 1
-         ;;
-
-    ":") failmsg "missing argument: -$OPTARG <argument>"
-         exit 1
-         ;;
-
-  esac
-
-done
-
-# get number of positional parameters
-PPNUM=$(( $# - OPTIND + 1 ))
-
-# drop all parsed options
-shift $(( OPTIND - 1 ))
 
 # ------------------------------------------------------------------------------
 # commands                                                              commands
