@@ -165,39 +165,45 @@ function simplify()
       "
 }
 
-# ----
-# edit
-# ----
+# -------------
+# setup_window
+# -------------
 #
-# This function shows the given file in a graphic editor.
+# $1  process ID
+# $2  x offset
+# $3  y offset
+# $4  width
+# $5  height
+# $6  always on top:
+#     0 = NO
+#     1 = YES
 #
-# $1  filename
-#
-function edit()
+function setup_window()
 {
-  # set default values
-  local readonly POSX="780"
-  local readonly POSY="0"
-  local readonly WINW="800"
-  local readonly WINH="200"
-
-  # launch leafpad in background
-  leafpad "$1" &
-
-  # get process ID
-  PID="$!"
+  # name positional parameters
+  local readonly PRID="$1"
+  local readonly POSX="$2"
+  local readonly POSY="$3"
+  local readonly WINW="$4"
+  local readonly WINH="$5"
+  local readonly ATOP="$6"
 
   # reset window ID
-  WID=""
+  local WID=""
 
   # wait for window to be shown
   while [ -z "$WID" ]
   do
 
     # get window ID
-    WID=$(wmctrl -lp | sed -nre "s/^(0x[[:xdigit:]]+) +[^[:space:]]+ +$PID .+/\1/p")
+    local WID=$(wmctrl -lp | sed -nre "s/^(0x[[:xdigit:]]+) +[^[:space:]]+ +$PRID .+/\1/p")
 
   done &>"/dev/null" 
+
+  # disable fullscreen
+  wmctrl -ir "$WID" -b "remove,fullscreen"
+  wmctrl -ir "$WID" -b "remove,maximized_vert"
+  wmctrl -ir "$WID" -b "remove,maximized_horz"
 
   # move and resize window
   #   A move and resize argument has the format 'g,x,y,w,h'. All five components
@@ -209,28 +215,283 @@ function edit()
   #   interpreted to mean that the current geometry value should not be modified.
   wmctrl -ir "$WID" -e "0,$POSX,$POSY,$WINW,$WINH"
 
-  # set 'always on top'
-  wmctrl -ir "$WID" -b "add,above"
+  # check flag
+  if [ "$ATOP" == "1" ] ; then
 
-  # wait for leafpad to close
-  wait "$PID"
+    # set 'always on top'
+    wmctrl -ir "$WID" -b "add,above"
+
+  fi
 }
 
-# ---------
-# get_title
-# ---------
-#
-# This function returns the TITLE tag from the given file.
+# -------
+# get_tag
+# -------
 #
 # $1  filename
+# $2  tag name
 #
-function get_title()
+function get_tag()
 {
   sed --quiet           \
       --regexp-extended \
       --expression="
 
-        # get title (branch to end if no TITLE is found)
+        # grep from start tag to end tag
+        /^<$2>$/,/^<\/$2>$/ {
+
+          # drop start and end tag
+          /^<$2>$/   { d }
+          /^<\/$2>$/ { d }
+
+          # trim line
+          s/[[:space:]\xC2\xAD]+/ /g
+          s/^ //
+          s/ $//
+
+          # ascify special characters
+          s/–/-/g
+          s//9/g
+          s//8/g
+          s//7/g
+          s//6/g
+          s//5/g
+          s//4/g
+          s//3/g
+          s//2/g
+          s//1/g
+          s//0/g
+
+          # print non-empty lines
+          /.+/ { p }
+
+        }
+ 
+      " "$1"
+}
+
+# -------------
+# get_authors_t
+# -------------
+#
+# $1  filename
+#
+function get_authors_t()
+{
+  get_tag "$1" "authors"  \
+  | sed --regexp-extended \
+        --expression="
+
+          # split lines
+          s|[\x02/·•]|\n|g
+
+
+        "                 \
+  | sed --quiet           \
+        --regexp-extended \
+        --expression="
+
+          # trim line
+          s/[[:space:]]+/ /g
+          s/^ //
+          s/ $//
+
+          # name is already comma-separated
+          /,/ { b addtag }
+
+          # copy last name to the front
+          s/(.+) ([^ ]+)$/\2, \1/
+
+          :addtag
+
+          # add tag to non-empty lines
+          s/.+/AUTHOR=&/p
+
+        "
+}
+
+# -------------
+# get_editors_t
+# -------------
+#
+# $1  filename
+#
+function get_editors_t()
+{
+  get_tag "$1" "editors"  \
+  | sed --regexp-extended \
+        --expression="
+
+          # split lines
+          s|[\x02/·•]|\n|g
+
+        "                 \
+  | sed --quiet           \
+        --regexp-extended \
+        --expression="
+
+          # trim line
+          s/[[:space:]]+/ /g
+          s/^ //
+          s/ $//
+
+          # name is already comma-separated
+          /,/ { b addtag }
+
+          # copy last name to the front
+          s/(.+) ([^ ]+)$/\2, \1/
+
+          :addtag
+
+          # add tag to non-empty lines
+          s/.+/EDITOR=&/p
+
+        "
+}
+
+# -----------
+# get_title_t
+# -----------
+#
+# $1  filename
+#
+function get_title_t()
+{
+  get_tag "$1" "title"    \
+  | sed --quiet           \
+        --regexp-extended \
+        --expression="
+
+          # append line to hold space
+          H
+
+          # last line
+          $ {
+
+            # copy hold space to pattern space
+            g
+
+            # concatenate all lines
+            s/\x0A/ /g
+
+            # trim line
+            s/[[:space:]]+/ /g
+            s/^ //
+            s/ $//
+
+            # add tag to non-empty lines
+            s/.+/TITLE=&/p
+          }
+        "
+}
+
+# ----------
+# get_year_t
+# ----------
+#
+# $1  filename
+#
+function get_year_t()
+{
+  get_tag "$1" "year"     \
+  | sed --quiet           \
+        --regexp-extended \
+        --expression="
+
+          # append line to hold space
+          H
+
+          # last line
+          $ {
+
+            # copy hold space to pattern space
+            g
+
+            # concatenate all lines
+            s/\x0A/ /g
+
+            # trim line
+            s/[[:space:]]+/ /g
+            s/^ //
+            s/ $//
+
+            # add tag to non-empty lines
+            s/.+/YEAR=&/p
+          }
+        "
+}
+
+# ------------
+# get_author_k
+# ------------
+#
+# This function returns all AUTHOR tags from the given file.
+#
+# $1  filename
+#
+function get_authors_k()
+{
+  sed --quiet           \
+      --regexp-extended \
+      --expression="
+
+        # crop author (branch to end if no TITLE is found)
+        s/^AUTHOR=(.+)/\1/ ; T
+
+        # trim line
+        s/[[:space:]]+/ /
+        s/^ //
+        s/ $//
+
+        # print non-empty line
+        /.+/p
+
+      " "$1"
+}
+
+# -------------
+# get_editors_k
+# -------------
+#
+# This function returns all EDITOR tags from the given file.
+#
+# $1  filename
+#
+function get_editors_k()
+{
+  sed --quiet           \
+      --regexp-extended \
+      --expression="
+
+        # crop author (branch to end if no TITLE is found)
+        s/^EDITOR=(.+)/\1/ ; T
+
+        # trim line
+        s/[[:space:]]+/ /
+        s/^ //
+        s/ $//
+
+        # print non-empty line
+        /.+/p
+
+      " "$1"
+}
+
+# -----------
+# get_title_k
+# -----------
+#
+# This function returns the TITLE tag from the given file.
+#
+# $1  filename
+#
+function get_title_k()
+{
+  sed --quiet           \
+      --regexp-extended \
+      --expression="
+
+        # crop title (branch to end if no TITLE is found)
         s/^TITLE=(.+)/\1/ ; T
 
         # trim line
@@ -247,21 +508,21 @@ function get_title()
       " "$1"
 }
 
-# --------
-# get_year
-# --------
+# ----------
+# get_year_k
+# ----------
 #
 # This function returns the YEAR tag from the given file.
 #
 # $1  filename
 #
-function get_year()
+function get_year_k()
 {
   sed --quiet           \
       --regexp-extended \
       --expression="
 
-        # get year (branch to end if no YEAR is found)
+        # crop year (branch to end if no YEAR is found)
         s/^YEAR=(.+)/\1/ ; T
 
         # trim line
@@ -278,160 +539,100 @@ function get_year()
       " "$1"
 }
 
-# -----------
-# get_authors
-# -----------
+# ------------
+# get_filename
+# ------------
 #
-# This function concatenates all AUTHOR tags from the given file.
+# $1  filename (KEY=VALUE file)
 #
-# $1  filename
-#
-function get_authors()
+function get_filename()
 {
-  cat "$1"                \
-  | sed --quiet           \
-        --regexp-extended \
-        --expression="
+  # read data from KEY=VALUE file
+  local AUTHOR1=$(get_authors_k "$1" | sed -nre "1p")
+  local AUTHOR2=$(get_authors_k "$1" | sed -nre "2p")
+  local AUTHOR3=$(get_authors_k "$1" | sed -nre "3p")
+  local EDITOR1=$(get_editors_k "$1" | sed -nre "1p")
+  local EDITOR2=$(get_editors_k "$1" | sed -nre "2p")
+  local EDITOR3=$(get_editors_k "$1" | sed -nre "3p")
+  local   TITLE=$(get_title_k   "$1")
+  local    YEAR=$(get_year_k    "$1")
 
-          # skip comments
-          /^#/ { d }
+  # check title
+  if [ -z "$TITLE" ] ; then
 
-          # get author (branch to end if no AUTHOR is found)
-          s/^AUTHOR=(.+)/\1/ ; T
+    # notify user
+    failmsg "no title given"
 
-          # trim line
-          s/[[:space:]]+/ /
-          s/^ //
-          s/ $//
+    # signalize trouble
+    return 1
 
-          # print non-empty line
-          /.+/ { p }
+  fi
 
-          # stop after first et alii
-          /^et al\.$/ { q }
+  # check year
+  if [ -z "$YEAR" ] ; then
 
-        "                 \
-  | sed -re "$ a DUMMY"   \
-  | sed --quiet           \
-        --regexp-extended \
-        --expression="
+    # notify user
+    failmsg "no year given"
 
-          # last line found (DUMMY)
-          $ {
+    # signalize trouble
+    return 1
 
-            # copy hold space to pattern space
-            g
+  fi
 
-            # concatenate lines (separate with semicolon)
-            s/\x0A/; /g
+  # editors given
+  if [ -n "$EDITOR1" ] ; then
 
-            # trim both ends
-            s/^[; ]*//
-            s/[; ]*$//
+    # more than two editors
+    if [ -n "$EDITOR3" ] ; then
 
-            # don't separate et alii
-            s/;( et al\.)$/\1/
+      local NAMES="$EDITOR1 (hg) et al."
 
-            # print non-empty line
-            /.+/ { p }
+    # two editors
+    elif [ -n "$EDITOR2" ] ; then
 
-            # branch to end of script
-            b
-          }
+      local NAMES="$EDITOR1 (hg); $EDITOR2 (hg)"
 
-          # name is already comma-separated:
-          #   append line to hold space without modification
-          #   and branch to end of script
-          /,/ { H ; b }
+    # one single editor
+    else
 
-          # et alii found
-          /^et al\.$/ { H ; b }
+      local NAMES="$EDITOR1 (hg)"
 
-          # copy last name to the front
-          s/(.+) ([^ ]+)$/\2, \1/
+    fi
 
-          # append line to hold space
-          H
+  # authors given
+  elif [ -n "$AUTHOR1" ] ; then
 
-        "
-}
+    # more than two authors
+    if [ -n "$AUTHOR3" ] ; then
 
-# -----------
-# get_editors
-# -----------
-#
-# This function concatenates all EDITOR tags from the given file.
-#
-# $1  filename
-#
-function get_editors()
-{
-  cat "$1"                \
-  | sed --quiet           \
-        --regexp-extended \
-        --expression="
+      local NAMES="$AUTHOR1 et al."
 
-          # skip comments
-          /^#/ { d }
+    # two authors
+    elif [ -n "$AUTHOR2" ] ; then
 
-          # get author (branch to end if no AUTHOR is found)
-          s/^EDITOR=(.+)/\1/ ; T
+      local NAMES="$AUTHOR1; $AUTHOR2"
 
-          # trim line
-          s/[[:space:]]+/ /
-          s/^ //
-          s/ $//
+    # one single author
+    else
 
-          # print non-empty line
-          /.+/ { p }
+      local NAMES="$AUTHOR1"
 
-          # stop after first et alii
-          /^et al\.$/ { q }
+    fi
 
-        "                 \
-  | sed -re "$ a DUMMY"   \
-  | sed --quiet           \
-        --regexp-extended \
-        --expression="
+  else
 
-          # last line found (DUMMY)
-          $ {
+    # notify user
+    failmsg "at least one author or editor must be given"
 
-            # copy hold space to pattern space
-            g
+    # signalize trouble
+    return 1
 
-            # concatenate lines (separate with semicolon)
-            s/\x0A/; /g
+  fi
 
-            # trim both ends
-            s/^[; ]*//
-            s/[; ]*$//
-
-            # don't separate et alii
-            s/ \(Hg\.\);( et al\. \(Hg\.\))$/\1/
-
-            # print non-empty line
-            /.+/ { p }
-
-            # branch to end of script
-            b
-          }
-
-          # name is already comma-separated:
-          #   append editor id
-          #   and branch to end of script
-          /,/ { s/.+/& (Hg.)/ ; H ; b }
-
-          # et alii found
-          /^et al\.$/ { s/.+/& (Hg.)/ ; H ; b }
-
-          # copy last name to the front and append editor id
-          s/(.+) ([^ ]+)$/\2, \1 (Hg.)/
-
-          # append line to hold space
-          H
-
-        "
+  # create filename (no extension)
+  echo "$NAMES ($YEAR): $TITLE" \
+  | utf82ascii                  \
+  | simplify
 }
 
 # ------------------------------------------------------------------------------
@@ -489,32 +690,97 @@ if [ ! -w "$DNAME" ] ; then
 fi
 
 # create temporary file
-TEMPFILE=$(mktemp --suffix=".bookrename")
+TEMPFILE1=$(mktemp --suffix=".bookrename")
+TEMPFILE2=$(mktemp --suffix=".bookrename")
 
 # clean up on exit
-trap 'rm -f "$TEMPFILE"' EXIT
+trap 'rm -f "$TEMPFILE1" "$TEMPFILE2"' EXIT
 
 # redirect entire group
 {
-  echo "TITLE="
-  echo "AUTHOR="
-  echo "AUTHOR="
-  echo "###### AUTHOR=et al."
-  echo "EDITOR="
-  echo "EDITOR="
-  echo "###### EDITOR=et al."
-  echo "YEAR="
 
-} > "$TEMPFILE"
+  echo "<!-- ------------------------------------------------------------ -->"
+  echo "<authors>"
+  echo
+  echo "</authors>"
+  echo "<!-- ------------------------------------------------------------ -->"
+  echo "<editors>"
+  echo
+  echo "</editors>"
+  echo "<!-- ------------------------------------------------------------ -->"
+  echo "<title>"
+  echo
+  echo "</title>"
+  echo "<!-- ------------------------------------------------------------ -->"
+  echo "<year>"
+  echo
+  echo "</year>"
+  echo "<!-- ------------------------------------------------------------ -->"
 
-# open pdf file on page one
-xreader -i 1 "$1" &
+} > "$TEMPFILE1"
+
+# open pdf file on page 3
+{ xreader -i 3 "$1" & } &>"/dev/null"
 
 # get process id
 XREADERPID="$!"
 
-# show editor
-edit "$TEMPFILE"
+# maximize xreader
+setup_window "$XREADERPID" "0" "0" "1600" "849" "0"
+
+# open leafpad
+{ leafpad "$TEMPFILE1" & } &>"/dev/null"
+
+# get process id
+LEAFPADPID="$!"
+
+# maximize xreader
+setup_window "$LEAFPADPID" "1310" "105" "270" "500" "1"
+
+# wait for leafpad to terminate
+wait "$LEAFPADPID"
+
+# read tags and write KEY=VALUE pairs
+{
+
+  get_title_t   "$TEMPFILE1"
+  get_authors_t "$TEMPFILE1"
+  get_editors_t "$TEMPFILE1"
+  get_year_t    "$TEMPFILE1"
+
+} > "$TEMPFILE2"
+
+# check if file is empty (or missing)
+if [ ! -s "$TEMPFILE2" ] ; then
+
+  # check if xreader is still running
+  RUNNING=$(ps -A | grep -E "^[[:space:]]*$XREADERPID[[:space:]].+xreader$")
+
+  # check process
+  if [ -n "$RUNNING" ] ; then
+
+    # kill xreader
+    kill "$XREADERPID"
+    wait "$XREADERPID"
+
+  fi &>"/dev/null"
+
+  # finish
+  exit 1
+
+fi
+
+# open leafpad
+{ leafpad "$TEMPFILE2" & } &>"/dev/null"
+
+# get process id
+LEAFPADPID="$!"
+
+# maximize xreader
+setup_window "$LEAFPADPID" "780" "105" "800" "200" "1"
+
+# wait for leafpad to terminate
+wait "$LEAFPADPID"
 
 # check if xreader is still running
 RUNNING=$(ps -A | grep -E "^[[:space:]]*$XREADERPID[[:space:]].+xreader$")
@@ -528,110 +794,23 @@ if [ -n "$RUNNING" ] ; then
 
 fi &>"/dev/null"
 
-# get data from tag file
-  TITLE=$(get_title   "$TEMPFILE")
-AUTHORS=$(get_authors "$TEMPFILE")
-EDITORS=$(get_editors "$TEMPFILE")
-   YEAR=$(get_year    "$TEMPFILE")
+# check if file is empty (or missing)
+if [ ! -s "$TEMPFILE2" ] ; then
 
-# check title
-if [ -z "$TITLE" ] ; then
-
-  # notify user
-  failmsg "no title given"
-
-  # signalize trouble
+  # finish
   exit 1
 
 fi
 
-# check year
-if [ -z "$YEAR" ] ; then
-
-  # notify user
-  failmsg "no year given"
-
-  # signalize trouble
-  exit 1
-
-fi
-
-# check authors and editors
-if [ -z "$AUTHORS$EDITORS" ] ; then
-
-  # notify user
-  failmsg "at least one author or editor must be given"
-
-  # signalize trouble
-  exit 1
-
-fi
-
-# bibliographical reference
-REFERENCE=""
-
-# check if authors are given
-if [ -n "$AUTHORS" ] ; then
-
-  # start with authors
-  REFERENCE="$AUTHORS"
-
-fi
-
-# check if editors are given
-if [ -n "$EDITORS" ] ; then
-
-  # check if reference has alredy been started
-  if [ -n "$REFERENCE" ] ; then
-
-    # append separator
-    REFERENCE="$REFERENCE; "
-
-  fi
-
-  # append editors
-  REFERENCE="$REFERENCE$EDITORS"
-
-fi
-
-# check if year is given
-if [ -n "$YEAR" ] ; then
-
-  # check if reference has alredy been started
-  if [ -n "$REFERENCE" ] ; then
-
-    # append separator
-    REFERENCE="$REFERENCE "
-
-  fi
-
-  # append year
-  REFERENCE="$REFERENCE($YEAR)"
-
-fi
-
-# check if title is given
-if [ -n "$TITLE" ] ; then
-
-  # check if reference has alredy been started
-  if [ -n "$REFERENCE" ] ; then
-
-    # append separator
-    REFERENCE="$REFERENCE: "
-
-  fi
-
-  # append title
-  REFERENCE="$REFERENCE$TITLE"
-
-fi
+# get bibliographic title
+PDFTITLE=$(get_filename "$TEMPFILE2")
 
 # get random hash value
 HASH=$(date -Ins | sha1sum | sed -re "s/ +//")
 
 # create new filenames
 TEMPNAME=$(printf "%s%s.pdf" "$DNAME" "$HASH")
-FILENAME=$(printf "%s%s.pdf" "$DNAME" "$(utf82ascii <<< "$REFERENCE" | simplify)")
+FILENAME=$(printf "%s%s.pdf" "$DNAME" "$PDFTITLE")
 
 # temporary rename given file
 mv --no-clobber "$1" "$TEMPNAME" &>"/dev/null"
