@@ -283,7 +283,7 @@ function get_authors_t()
         --expression="
 
           # split lines
-          s|[\x02/·•]|\n|g
+          s|[\x02/·•\|]|\n|g
 
 
         "                 \
@@ -323,7 +323,7 @@ function get_editors_t()
         --expression="
 
           # split lines
-          s|[\x02/·•]|\n|g
+          s|[\x02/·•\|]|\n|g
 
         "                 \
   | sed --quiet           \
